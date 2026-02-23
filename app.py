@@ -34,7 +34,7 @@ session = get_active_session()
 def get_app_role(user_name):
     df = session.sql("""
         SELECT APP_ROLE
-        FROM AI_POC_DB.HEALTH_POLICY_POC.APP_USER_ACCESS
+        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.APP_USER_ACCESS
         WHERE (
             UPPER(USER_NAME) = UPPER(:1)
             OR UPPER(USER_NAME) = SPLIT(UPPER(:1), '@')[0]
@@ -55,7 +55,7 @@ def load_filter_values():
         SELECT DISTINCT
             LOB,
             STATE
-        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
         ORDER BY 1,2
     """).to_pandas()
 
@@ -128,7 +128,7 @@ st.title("📄 Policy & Control Search")
 filters = load_filter_values()
 
 # =================================================
-# SEARCH MODE (UNCHANGED)
+# SEARCH MODE
 # =================================================
 if app_mode == "Search Policy":
 
@@ -141,7 +141,7 @@ if app_mode == "Search Policy":
 
     version_df = session.sql(f"""
         SELECT DISTINCT VERSION
-        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
         WHERE LOB = '{lob}'
         AND STATE = '{state}'
         ORDER BY VERSION
@@ -156,7 +156,7 @@ if app_mode == "Search Policy":
     if search_btn:
 
         search_sql = f"""
-            CALL AI_POC_DB.HEALTH_POLICY_POC.SEARCH_POLICY_CLAUSE(
+            CALL AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.SEARCH_POLICY_CLAUSE(
                 '{search_text}',
                 '{state}',
                 '{lob}',
@@ -172,7 +172,7 @@ if app_mode == "Search Policy":
             st.dataframe(results_df)
 
 # =================================================
-# ANALYZE POLICY CHANGES (TASK 3)
+# ANALYZE POLICY CHANGES
 # =================================================
 if app_mode == "Analyze Policy Changes":
 
@@ -180,24 +180,21 @@ if app_mode == "Analyze Policy Changes":
 
     st.sidebar.header("🧩 Comparison Filters")
 
-    # 1 ️⃣ LOB
     compare_lob = st.sidebar.selectbox(
         "LOB",
         filters["LOB"],
         key="compare_lob"
     )
 
-    # 2 ️⃣ State
     compare_state = st.sidebar.selectbox(
         "State",
         filters["STATE"],
         key="compare_state"
     )
 
-    # 3️ ⃣ File Name Filtered by LOB + State
     file_df = session.sql(f"""
         SELECT DISTINCT FILE_NAME
-        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
         WHERE LOB = '{compare_lob}'
         AND STATE = '{compare_state}'
         ORDER BY FILE_NAME
@@ -211,22 +208,17 @@ if app_mode == "Analyze Policy Changes":
         key="selected_file"
     )
 
-    # 4 ️⃣ Versions for selected file
     version_df = session.sql(f"""
         SELECT DISTINCT VERSION
-        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
         WHERE FILE_NAME = '{selected_file}'
         ORDER BY VERSION
     """).to_pandas()
 
     versions = version_df["VERSION"].tolist()
 
-    if versions:
-        latest_version = sorted(versions)[-1]
-    else:
-        latest_version = None
+    latest_version = sorted(versions)[-1] if versions else None
 
-    # 5️ ⃣ Old Version Dropdown
     old_version = st.sidebar.selectbox(
         "Old Version",
         versions,
@@ -235,11 +227,10 @@ if app_mode == "Analyze Policy Changes":
 
     st.sidebar.write(f"Latest Version: {latest_version}")
 
-    # 6 ️⃣ Fetch DOC_ID
     def get_doc_id(file_name, version):
         df = session.sql(f"""
             SELECT DOC_ID
-            FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
+            FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
             WHERE FILE_NAME = '{file_name}'
             AND VERSION = '{version}'
         """).to_pandas()
