@@ -151,7 +151,7 @@ if app_mode == "Search Policy":
 
     version = st.sidebar.selectbox("Version", versions)
 
-    search_btn = st.sidebar.button("🔍 Search....")
+    search_btn = st.sidebar.button("🔍 Search")
 
     if search_btn:
 
