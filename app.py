@@ -34,7 +34,7 @@ session = get_active_session()
 def get_app_role(user_name):
     df = session.sql("""
         SELECT APP_ROLE
-        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.APP_USER_ACCESS
+        FROM AI_POC_DB.HEALTH_POLICY_POC.APP_USER_ACCESS
         WHERE (
             UPPER(USER_NAME) = UPPER(:1)
             OR UPPER(USER_NAME) = SPLIT(UPPER(:1), '@')[0]
@@ -55,7 +55,7 @@ def load_filter_values():
         SELECT DISTINCT
             LOB,
             STATE
-        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
         ORDER BY 1,2
     """).to_pandas()
 
@@ -141,31 +141,27 @@ if app_mode == "Search Policy":
 
     version_df = session.sql(f"""
         SELECT DISTINCT VERSION
-        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
         WHERE LOB = '{lob}'
         AND STATE = '{state}'
         ORDER BY VERSION
     """).to_pandas()
 
     versions = version_df["VERSION"].tolist()
-
     version = st.sidebar.selectbox("Version", versions)
 
     search_btn = st.sidebar.button("🔍 Search")
 
     if search_btn:
-
         search_sql = f"""
-            CALL AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.SEARCH_POLICY_CLAUSE(
+            CALL AI_POC_DB.HEALTH_POLICY_POC.SEARCH_POLICY_CLAUSE(
                 '{search_text}',
                 '{state}',
                 '{lob}',
                 '{version}'
             )
         """
-
         results_df = session.sql(search_sql).to_pandas()
-
         if results_df.empty:
             st.warning("No matching clauses found.")
         else:
@@ -180,61 +176,44 @@ if app_mode == "Analyze Policy Changes":
 
     st.sidebar.header("🧩 Comparison Filters")
 
-    compare_lob = st.sidebar.selectbox(
-        "LOB",
-        filters["LOB"],
-        key="compare_lob"
-    )
-
-    compare_state = st.sidebar.selectbox(
-        "State",
-        filters["STATE"],
-        key="compare_state"
-    )
+    compare_lob = st.sidebar.selectbox("LOB", filters["LOB"], key="compare_lob")
+    compare_state = st.sidebar.selectbox("State", filters["STATE"], key="compare_state")
 
     file_df = session.sql(f"""
         SELECT DISTINCT FILE_NAME
-        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
         WHERE LOB = '{compare_lob}'
         AND STATE = '{compare_state}'
         ORDER BY FILE_NAME
     """).to_pandas()
 
     filenames = file_df["FILE_NAME"].tolist()
-
-    selected_file = st.sidebar.selectbox(
-        "Policy File Name",
-        filenames,
-        key="selected_file"
-    )
+    selected_file = st.sidebar.selectbox("Policy File Name", filenames)
 
     version_df = session.sql(f"""
         SELECT DISTINCT VERSION
-        FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
+        FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
         WHERE FILE_NAME = '{selected_file}'
         ORDER BY VERSION
     """).to_pandas()
 
     versions = version_df["VERSION"].tolist()
 
-    latest_version = sorted(versions)[-1] if versions else None
+    if versions:
+        latest_version = max(versions, key=lambda v: int(v.replace("v", "")))
+    else:
+        latest_version = None
 
-    old_version = st.sidebar.selectbox(
-        "Old Version",
-        versions,
-        key="old_version"
-    )
-
+    old_version = st.sidebar.selectbox("Old Version", versions)
     st.sidebar.write(f"Latest Version: {latest_version}")
 
     def get_doc_id(file_name, version):
         df = session.sql(f"""
             SELECT DOC_ID
-            FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.DOCUMENT_METADATA
+            FROM AI_POC_DB.HEALTH_POLICY_POC.DOCUMENT_METADATA
             WHERE FILE_NAME = '{file_name}'
             AND VERSION = '{version}'
         """).to_pandas()
-
         if df.empty:
             return None
         return df.iloc[0]["DOC_ID"]
@@ -246,13 +225,80 @@ if app_mode == "Analyze Policy Changes":
 
     if analyze_btn:
 
-        st.subheader("Selected Comparison")
+        # -------------------------------------------------
+        # Call Compare Procedure
+        # -------------------------------------------------
+        session.sql(f"""
+            CALL AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.COMPARE_POLICY_VERSIONS(
+                {old_doc_id},
+                {new_doc_id}
+            )
+        """).collect()
 
-        st.write("Policy File:", selected_file)
-        st.write("Old Version:", old_version)
-        st.write("Latest Version:", latest_version)
-        st.write("Old DOC_ID:", old_doc_id)
-        st.write("New DOC_ID:", new_doc_id)
+        diff_df = session.sql(f"""
+            SELECT *
+            FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.POLICY_VERSION_DIFFS
+            WHERE OLD_DOC_ID = {old_doc_id}
+              AND NEW_DOC_ID = {new_doc_id}
+            ORDER BY DIFF_ID
+        """).to_pandas()
+
+        if diff_df.empty:
+            st.warning("No differences found.")
+            st.stop()
+
+        st.markdown("## 📝 Change Summary")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"### Old Version: {old_version}")
+        with col2:
+            st.markdown(f"### New Version: {latest_version}")
+
+        st.markdown("---")
+
+        for _, row in diff_df.iterrows():
+
+            change_type = row["CHANGE_TYPE"]
+            old_clause = row["OLD_CLAUSE"] if row["OLD_CLAUSE"] else ""
+            new_clause = row["NEW_CLAUSE"] if row["NEW_CLAUSE"] else ""
+
+            if change_type == "removed":
+                old_color = "#f8d7da"
+                new_color = "transparent"
+            elif change_type == "added":
+                old_color = "transparent"
+                new_color = "#d4edda"
+            elif change_type == "modified":
+                old_color = "#fff3cd"
+                new_color = "#fff3cd"
+            else:
+                old_color = "transparent"
+                new_color = "transparent"
+
+            col_old, col_new = st.columns(2)
+
+            with col_old:
+                if old_clause:
+                    st.markdown(f"""
+                    <div style="background-color:{old_color};
+                                padding:15px;
+                                border-radius:8px;
+                                margin-bottom:10px;">
+                        {old_clause}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with col_new:
+                if new_clause:
+                    st.markdown(f"""
+                    <div style="background-color:{new_color};
+                                padding:15px;
+                                border-radius:8px;
+                                margin-bottom:10px;">
+                        {new_clause}
+                    </div>
+                    """, unsafe_allow_html=True)
 
 # -------------------------------------------------
 # Footer
