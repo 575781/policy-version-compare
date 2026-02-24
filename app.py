@@ -99,10 +99,6 @@ if not st.session_state["authenticated"]:
 current_user = st.session_state["username"]
 app_role = st.session_state["app_role"]
 
-current_role = session.sql(
-    "SELECT CURRENT_ROLE()"
-).collect()[0][0]
-
 # -------------------------------------------------
 # Sidebar – User Info
 # -------------------------------------------------
@@ -112,6 +108,7 @@ st.sidebar.write("🛡️ App Role:", app_role.upper())
 
 if st.sidebar.button("🚪 Logout"):
     st.session_state.clear()
+    st.experimental_rerun()
 
 # -------------------------------------------------
 # Sidebar – Menu
@@ -128,7 +125,7 @@ st.title("📄 Policy & Control Search")
 filters = load_filter_values()
 
 # =================================================
-# SEARCH MODE
+# SEARCH MODE (UNCHANGED)
 # =================================================
 if app_mode == "Search Policy":
 
@@ -153,6 +150,7 @@ if app_mode == "Search Policy":
     search_btn = st.sidebar.button("🔍 Search")
 
     if search_btn:
+
         search_sql = f"""
             CALL AI_POC_DB.HEALTH_POLICY_POC.SEARCH_POLICY_CLAUSE(
                 '{search_text}',
@@ -161,7 +159,9 @@ if app_mode == "Search Policy":
                 '{version}'
             )
         """
+
         results_df = session.sql(search_sql).to_pandas()
+
         if results_df.empty:
             st.warning("No matching clauses found.")
         else:
@@ -176,8 +176,8 @@ if app_mode == "Analyze Policy Changes":
 
     st.sidebar.header("🧩 Comparison Filters")
 
-    compare_lob = st.sidebar.selectbox("LOB", filters["LOB"], key="compare_lob")
-    compare_state = st.sidebar.selectbox("State", filters["STATE"], key="compare_state")
+    compare_lob = st.sidebar.selectbox("LOB", filters["LOB"])
+    compare_state = st.sidebar.selectbox("State", filters["STATE"])
 
     file_df = session.sql(f"""
         SELECT DISTINCT FILE_NAME
@@ -188,6 +188,7 @@ if app_mode == "Analyze Policy Changes":
     """).to_pandas()
 
     filenames = file_df["FILE_NAME"].tolist()
+
     selected_file = st.sidebar.selectbox("Policy File Name", filenames)
 
     version_df = session.sql(f"""
@@ -200,7 +201,7 @@ if app_mode == "Analyze Policy Changes":
     versions = version_df["VERSION"].tolist()
 
     if versions:
-        latest_version = max(versions, key=lambda v: int(v.replace("v", "")))
+        latest_version = sorted(versions)[-1]
     else:
         latest_version = None
 
@@ -214,6 +215,7 @@ if app_mode == "Analyze Policy Changes":
             WHERE FILE_NAME = '{file_name}'
             AND VERSION = '{version}'
         """).to_pandas()
+
         if df.empty:
             return None
         return df.iloc[0]["DOC_ID"]
@@ -225,9 +227,7 @@ if app_mode == "Analyze Policy Changes":
 
     if analyze_btn:
 
-        # -------------------------------------------------
-        # Call Compare Procedure
-        # -------------------------------------------------
+        # 1️⃣ Generate Diff
         session.sql(f"""
             CALL AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.COMPARE_POLICY_VERSIONS(
                 {old_doc_id},
@@ -235,70 +235,86 @@ if app_mode == "Analyze Policy Changes":
             )
         """).collect()
 
+        # 2️⃣ Generate Summary
+        summary_result = session.sql(f"""
+            CALL AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.GENERATE_CHANGE_SUMMARY(
+                {old_doc_id},
+                {new_doc_id}
+            )
+        """).collect()
+
+        summary_json = summary_result[0][0]
+
+        # -------------------------------------------------
+        # 🔷 CHANGE SUMMARY BLOCK (CLAUSE DIFF)
+        # -------------------------------------------------
+        st.markdown("## 🔷 Change Summary")
+
         diff_df = session.sql(f"""
-            SELECT *
+            SELECT CHANGE_TYPE, OLD_CLAUSE, NEW_CLAUSE
             FROM AI_POC_DB.HEALTH_POLICY_POC_CHANGE_SUMMARY.POLICY_VERSION_DIFFS
             WHERE OLD_DOC_ID = {old_doc_id}
-              AND NEW_DOC_ID = {new_doc_id}
-            ORDER BY DIFF_ID
+            AND NEW_DOC_ID = {new_doc_id}
         """).to_pandas()
 
-        if diff_df.empty:
-            st.warning("No differences found.")
-            st.stop()
+        col_old, col_new = st.columns(2)
 
-        st.markdown("## 📝 Change Summary")
+        with col_old:
+            st.markdown(f"### Old Version ({old_version})")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f"### Old Version: {old_version}")
-        with col2:
-            st.markdown(f"### New Version: {latest_version}")
-
-        st.markdown("---")
+        with col_new:
+            st.markdown(f"### New Version ({latest_version})")
 
         for _, row in diff_df.iterrows():
 
             change_type = row["CHANGE_TYPE"]
-            old_clause = row["OLD_CLAUSE"] if row["OLD_CLAUSE"] else ""
-            new_clause = row["NEW_CLAUSE"] if row["NEW_CLAUSE"] else ""
-
-            if change_type == "removed":
-                old_color = "#f8d7da"
-                new_color = "transparent"
-            elif change_type == "added":
-                old_color = "transparent"
-                new_color = "#d4edda"
-            elif change_type == "modified":
-                old_color = "#fff3cd"
-                new_color = "#fff3cd"
-            else:
-                old_color = "transparent"
-                new_color = "transparent"
+            old_clause = row["OLD_CLAUSE"]
+            new_clause = row["NEW_CLAUSE"]
 
             col_old, col_new = st.columns(2)
 
-            with col_old:
-                if old_clause:
-                    st.markdown(f"""
-                    <div style="background-color:{old_color};
-                                padding:15px;
-                                border-radius:8px;
-                                margin-bottom:10px;">
-                        {old_clause}
-                    </div>
-                    """, unsafe_allow_html=True)
+            if change_type == "removed":
+                with col_old:
+                    st.markdown(
+                        f"<div style='background-color:#ffcccc;padding:10px;border-radius:5px'>{old_clause}</div>",
+                        unsafe_allow_html=True
+                    )
+                with col_new:
+                    st.markdown("")
 
-            with col_new:
-                if new_clause:
-                    st.markdown(f"""
-                    <div style="background-color:{new_color};
-                                padding:15px;
-                                border-radius:8px;
-                                margin-bottom:10px;">
-                        {new_clause}
-                    </div>
-                    """, unsafe_allow_html=True)
+            elif change_type == "added":
+                with col_old:
+                    st.markdown("")
+                with col_new:
+                    st.markdown(
+                        f"<div style='background-color:#ccffcc;padding:10px;border-radius:5px'>{new_clause}</div>",
+                        unsafe_allow_html=True
+                    )
+
+            elif change_type == "modified":
+                with col_old:
+                    st.markdown(
+                        f"<div style='background-color:#fff3cd;padding:10px;border-radius:5px'>{old_clause}</div>",
+                        unsafe_allow_html=True
+                    )
+                with col_new:
+                    st.markdown(
+                        f"<div style='background-color:#fff3cd;padding:10px;border-radius:5px'>{new_clause}</div>",
+                        unsafe_allow_html=True
+                    )
+
+        # -------------------------------------------------
+        # 🔷 COMPARISON BLOCK (LLM SUMMARY)
+        # -------------------------------------------------
+        st.markdown("## 🔷 Comparison")
+
+        st.markdown("### Summary")
+        st.info(summary_json["summary"])
+
+        st.markdown("### ⚠ Risk Highlights")
+
+        for risk in summary_json["risk_highlights"]:
+            st.markdown(f"- {risk}")
 
 # -------------------------------------------------
 # Footer
