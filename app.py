@@ -52,7 +52,7 @@ def get_app_role(user_name):
 # -------------------------------------------------
 if not st.session_state["authenticated"]:
 
-    st.title("🔐 Policy Search Login")
+    st.title("🔐 Policy Search Login   ")
     st.caption("Authenticate to access Policy & Control Search")
 
     with st.form("login_form"):
